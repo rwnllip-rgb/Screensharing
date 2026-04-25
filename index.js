@@ -1,69 +1,67 @@
 const { Client } = require("discord.js-selfbot-v13");
 const { Streamer, prepareStream, playStream, Utils, Encoders } = require("@dank074/discord-video-stream");
 const TorrentSearchApi = require('torrent-search-api');
+const axios = require('axios'); // تأكد من وجود axios
 const express = require('express');
 
 const client = new Client();
 const streamer = new Streamer(client);
 
-// ================= حل مشكلة استدعاء WebTorrent =================
+// ================= نظام تحميل WebTorrent =================
 let torrentClient;
 import('webtorrent').then(mod => {
     const WebTorrent = mod.default || mod;
     torrentClient = new WebTorrent();
-    console.log("✅ مكتبة WebTorrent جاهزة!");
+    console.log("✅ نظام WebTorrent جاهز للعمل.");
 }).catch(err => console.error("❌ خطأ في تحميل WebTorrent:", err));
-// ==============================================================
 
-// ================= الإعدادات المتقدمة للبحث =================
-// تفعيل عدة مصادر لضمان تخطي حجب الـ IP في ريندر
+// ================= إعدادات البحث والاتصال =================
 try {
     TorrentSearchApi.enableProvider('1337x');
     TorrentSearchApi.enableProvider('ThePirateBay');
-    TorrentSearchApi.enableProvider('Limetorrents');
-    TorrentSearchApi.enableProvider('TorrentProject');
-    console.log("✅ تم تفعيل كافة مزودي البحث بنجاح.");
-} catch (e) {
-    console.error("⚠️ فشل تفعيل بعض مزودي البحث، سيتم العمل بالمتاح.");
-}
+} catch (e) { console.log("⚠️ فشل تفعيل بعض مزودي البحث الاحتياطيين."); }
 
-const TOKEN = process.env.DISCORD_TOKEN; // يفضل تركه يسحب من Environment Variables في ريندر
+const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = "1143587192061558988";
 const VOICE_CHANNEL_ID = "1143587192984317964";
-const PREFIX = "$"; 
-// ==============================================================
+const PREFIX = "$";
 
-// دالة البحث المطورة (مضمونة أكثر)
+// ================= دالة البحث الاحترافية (Anti-Block) =================
 async function searchMovieMagnet(query) {
+    console.log(`⏳ جاري البحث الذكي عن: ${query}`);
+
+    // [1] المحاولة الأولى: استخدام YTS API (الأكثر استقراراً على السيرفرات)
     try {
-        console.log(`⏳ جاري البحث العميق عن: ${query}`);
+        const ytsUrl = `https://yts.mx/api/v2/list_movies.json?query_term=${encodeURIComponent(query)}&quality=1080p`;
+        const res = await axios.get(ytsUrl, { timeout: 5000 });
         
-        // البحث في كل المواقع المفعلة وجلب أفضل 5 نتائج
-        let torrents = await TorrentSearchApi.search(query, 'Video', 5);
-        
-        // محاولة ثانية بدون تحديد تصنيف لو لم تظهر نتائج
-        if (!torrents || torrents.length === 0) {
-            torrents = await TorrentSearchApi.search(query, 'All', 5);
+        if (res.data && res.data.data && res.data.data.movies) {
+            const movie = res.data.data.movies[0];
+            const torrent = movie.torrents.find(t => t.quality === '1080p') || movie.torrents[0];
+            console.log(`✅ تم العثور عبر YTS API: ${movie.title}`);
+            return `magnet:?xt=urn:btih:${torrent.hash}&dn=${encodeURIComponent(movie.title)}`;
         }
-
-        if (!torrents || torrents.length === 0) return null;
-
-        // ترتيب النتائج حسب عدد الـ Seeders لضمان جودة البث
-        const sortedTorrents = torrents.sort((a, b) => (b.seeds || 0) - (a.seeds || 0));
-        const bestTorrent = sortedTorrents[0];
-
-        console.log(`✅ تم اختيار: ${bestTorrent.title} (الـ Seeds: ${bestTorrent.seeds || 'غير معروف'})`);
-
-        const magnet = await TorrentSearchApi.getMagnet(bestTorrent);
-        return magnet || null;
-    } catch (err) {
-        console.error("❌ خطأ أثناء عملية البحث:", err.message);
-        return null;
+    } catch (e) {
+        console.log("⚠️ فشل الاتصال بـ YTS API، جاري تجربة البحث البديل...");
     }
+
+    // [2] المحاولة الثانية: البحث في 1337x و PirateBay (كاحتياط)
+    try {
+        const torrents = await TorrentSearchApi.search(query, 'Video', 3);
+        if (torrents && torrents.length > 0) {
+            const best = torrents.sort((a, b) => (b.seeds || 0) - (a.seeds || 0))[0];
+            console.log(`✅ تم العثور عبر البحث العام: ${best.title}`);
+            return await TorrentSearchApi.getMagnet(best);
+        }
+    } catch (e) {
+        console.log("⚠️ فشل البحث العام (قد يكون بسبب حجب IP السيرفر).");
+    }
+
+    return null; // إذا لم يجد شيئاً في كل المحاولات
 }
 
 client.on("ready", () => {
-    console.log(`✅ البوت متصل الآن باسم: ${client.user.tag}`);
+    console.log(`✅ متصل ديسكورد باسم: ${client.user.tag}`);
 });
 
 client.on("messageCreate", async (message) => {
@@ -74,36 +72,28 @@ client.on("messageCreate", async (message) => {
 
     if (command === "play") {
         const movieQuery = args.join(" ");
-        if (!movieQuery) return message.reply("❌ يرجى كتابة اسم الفلم بعد الأمر!");
+        if (!movieQuery) return message.reply("❌ وين اسم الفلم؟");
 
-        if (!torrentClient) return message.reply("⏳ نظام التحميل قيد التشغيل، انتظر ثوانٍ وجرب مجدداً.");
+        if (!torrentClient) return message.reply("⏳ النظام يشتغل، عطني ثانية.");
 
-        const msg = await message.reply(`🔍 جاري البحث عن **${movieQuery}** عبر عدة مصادر...`);
+        const msg = await message.reply(`🔍 جاري البحث عن **${movieQuery}**...`);
 
         const magnet = await searchMovieMagnet(movieQuery);
-        if (!magnet) return msg.edit("❌ لم أتمكن من العثور على الفلم، حاول كتابة الاسم بالإنجليزية بدقة.");
+        if (!magnet) return msg.edit("❌ ما لقيت الفلم في أي مصدر، تأكد من الاسم بالانجلش أو جرب فلم ثاني.");
 
-        await msg.edit(`⚙️ تم العثور على أفضل تورنت! جاري الربط والبث...`);
+        await msg.edit(`⚙️ لقيت الفلم! جاري التحميل والبث (480p) لضمان الاستقرار...`);
 
-        // إضافة التورنت والبدء بالبث
         torrentClient.add(magnet, { path: '/tmp/webtorrent' }, async (torrent) => {
-            
-            // اختيار ملف الفيديو الأساسي (الأكبر حجماً)
-            const file = torrent.files.reduce((prev, current) => (prev.length > current.length) ? prev : current);
-            console.log(`🎬 جاري بث ملف: ${file.name}`);
+            const file = torrent.files.reduce((p, c) => (p.length > c.length) ? p : c);
+            console.log(`🎬 جاري بث: ${file.name}`);
             
             const stream = file.createReadStream();
 
             try {
                 await streamer.joinVoice(GUILD_ID, VOICE_CHANNEL_ID);
 
-                // إعدادات الـ Encoder متوافقة مع موارد ريندر المحدودة
-                let encoder = Encoders.software({
-                    x264: { preset: "ultrafast" } 
-                });
-
                 const { command: ffmpegCmd, output } = prepareStream(stream, {
-                    encoder,
+                    encoder: Encoders.software({ x264: { preset: "ultrafast" } }),
                     height: 480, 
                     frameRate: 30,
                     bitrateVideo: 1500, 
@@ -115,31 +105,20 @@ client.on("messageCreate", async (message) => {
                 });
 
                 await playStream(output, streamer, { type: "go-live" });
-                message.channel.send("✅ انتهى عرض الفلم بنجاح.");
-                
+                message.channel.send("✅ انتهى الفلم، ان شاء الله استمتعتوا!");
                 torrent.destroy();
             } catch (error) {
-                console.error("❌ خطأ أثناء البث:", error);
-                message.channel.send("❌ انقطع البث، قد يكون السبب ضعف الـ Seeds أو موارد السيرفر.");
+                console.error(error);
+                message.channel.send("❌ حدث خطأ أثناء البث، غالباً بسبب ضعف الـ Seeds.");
                 torrent.destroy();
             }
-        });
-
-        torrentClient.on('error', (err) => {
-            console.error("WebTorrent Error:", err.message);
         });
     }
 });
 
 client.login(TOKEN);
 
-// ================= سيرفر Express (لضمان عمل UptimeRobot) =================
+// ================= سيرفر الريندر =================
 const app = express();
-app.get("/", (req, res) => {
-    res.send("<h1>Bot is Online!</h1><p>WebTorrent Movie Streamer is running 24/7 on Render.</p>");
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`🌐 Web server active on port ${PORT}`);
-});
+app.get("/", (req, res) => res.send("Movie Bot is Live 24/7!"));
+app.listen(process.env.PORT || 3000);
