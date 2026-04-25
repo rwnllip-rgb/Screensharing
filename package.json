@@ -1,0 +1,20 @@
+{
+  "name": "movie-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@dank074/discord-video-stream": "^6.0.0",
+    "axios": "^1.15.2",
+    "discord.js-selfbot-v13": "^3.7.1",
+    "express": "^5.2.1",
+    "torrent-search-api": "^2.1.4",
+    "webtorrent": "^2.8.5"
+  }
+}
